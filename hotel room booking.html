@@ -1,0 +1,282 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Hotel Room Reservation — Starter</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 18px; }
+    .controls { margin-bottom: 12px; }
+    input[type="number"]{ width:70px; padding:6px; }
+    button { padding:8px 12px; margin-left:6px; }
+    .hotel { display:flex; flex-direction:column-reverse; gap:8px; }
+    .floor { border:1px solid #ddd; padding:8px; display:flex; align-items:center; gap:12px; }
+    .floor-label { width:60px; font-weight:bold; }
+    .rooms { display:flex; gap:6px; flex-wrap:wrap; }
+    .room {
+      width:46px; height:36px; border-radius:6px; display:flex; align-items:center;
+      justify-content:center; cursor:pointer; user-select:none; border:1px solid #aaa;
+    }
+    .available { background:#f8f8f8; }
+    .booked { background:#ffcccb; } /* red-ish */
+    .selected { background:#90ee90; } /* green-ish */
+    .occupied { background:#888; color:#fff; } /* random occupied */
+    .legend { margin-top:10px; }
+    .info { margin-top:10px; color:#333; }
+    .small { font-size:13px; color:#555; }
+  </style>
+</head>
+<body>
+  <h2>Hotel Room Reservation — Starter App</h2>
+
+  <div class="controls">
+    Rooms to book (1–5): <input id="numRooms" type="number" min="1" max="5" value="2" />
+    <button id="bookBtn">Book Rooms</button>
+    <button id="randBtn">Generate Random Occupancy</button>
+    <button id="resetBtn">Reset</button>
+  </div>
+
+  <div class="hotel" id="hotel"></div>
+
+  <div class="legend small">
+    <span style="display:inline-block;width:14px;height:14px;background:#f8f8f8;border:1px solid #aaa;margin-right:6px;"></span> Available
+    &nbsp;&nbsp;
+    <span style="display:inline-block;width:14px;height:14px;background:#90ee90;border:1px solid #aaa;margin-right:6px;"></span> Selected (new booking)
+    &nbsp;&nbsp;
+    <span style="display:inline-block;width:14px;height:14px;background:#ffcccb;border:1px solid #aaa;margin-right:6px;"></span> Booked
+    &nbsp;&nbsp;
+    <span style="display:inline-block;width:14px;height:14px;background:#888;border:1px solid #444;margin-right:6px;"></span> Occupied(unavailable)
+  </div>
+
+  <div class="info small" id="status"></div>
+
+<script>
+/* ----- Model: create rooms ----- */
+const floors = [];
+// Floors 1..9 => rooms 101-110 etc (index 1..10). Floor 10 => rooms 1001-1007 (index 1..7).
+for(let f=1; f<=9; f++){
+  const roomCount = 10;
+  const rooms = [];
+  for(let i=1;i<=roomCount;i++){
+    const roomNumber = f*100 + i;
+    rooms.push({ id: String(roomNumber), floor: f, idx: i, state: 'available' }); // state: available / booked / occupied
+  }
+  floors.push({ floor: f, rooms });
+}
+{
+  const f = 10, roomCount = 7, rooms=[];
+  for(let i=1;i<=roomCount;i++){
+    const roomNumber = 1000 + i;
+    rooms.push({ id: String(roomNumber), floor: f, idx: i, state: 'available' });
+  }
+  floors.push({ floor: f, rooms });
+}
+
+/* ----- Helpers ----- */
+function renderHotel(){
+  const hotelDiv = document.getElementById('hotel');
+  hotelDiv.innerHTML = '';
+  // display floors top-down (we already store 1..10, but we want top visually first; CSS column-reverse does that)
+  floors.forEach(floorObj=>{
+    const fl = document.createElement('div');
+    fl.className = 'floor';
+    const label = document.createElement('div');
+    label.className = 'floor-label';
+    label.textContent = 'Floor ' + floorObj.floor;
+    fl.appendChild(label);
+    const roomsDiv = document.createElement('div');
+    roomsDiv.className = 'rooms';
+    floorObj.rooms.forEach(r=>{
+      const rdiv = document.createElement('div');
+      rdiv.className = 'room ' + (r.state==='available'?'available': r.state==='booked'?'booked':'occupied');
+      rdiv.textContent = r.id;
+      // click toggles occupancy only (for testing)
+      rdiv.onclick = ()=> {
+        if(r.state === 'available') r.state = 'occupied';
+        else if(r.state === 'occupied') r.state = 'available';
+        else if(r.state === 'booked') alert('Already booked');
+        renderHotel();
+      };
+      roomsDiv.appendChild(rdiv);
+    });
+    fl.appendChild(roomsDiv);
+    hotelDiv.appendChild(fl);
+  });
+  updateStatus('');
+}
+
+function getAllAvailableRooms(){
+  const list=[];
+  floors.forEach(f=>{
+    f.rooms.forEach(r=>{ if(r.state==='available') list.push(r); });
+  });
+  return list;
+}
+
+function computeTravel(a,b){
+  // a,b are room objects with floor, idx
+  return Math.abs(a.floor - b.floor)*2 + Math.abs(a.idx - b.idx);
+}
+
+function totalPathTime(rooms){
+  if(rooms.length <= 1) return 0;
+  // sort by floor then index (a simple path ordering)
+  const s = rooms.slice().sort((x,y)=> x.floor===y.floor ? x.idx-y.idx : x.floor-y.floor);
+  let t = 0;
+  for(let i=1;i<s.length;i++) t += computeTravel(s[i-1], s[i]);
+  return t;
+}
+
+/* ----- Booking algorithm ----- */
+
+function findBestSameFloor(k){
+  // For each floor, if availableCount >= k, pick k rooms that minimize horizontal span (sliding window)
+  for(const f of floors){
+    const avail = f.rooms.filter(r=>r.state==='available').sort((a,b)=>a.idx-b.idx);
+    if(avail.length >= k){
+      // sliding window across indices to minimize span (maxIdx - minIdx)
+      let bestStart = 0, bestSpan = Infinity;
+      for(let i=0;i<=avail.length - k;i++){
+        const span = avail[i+k-1].idx - avail[i].idx;
+        if(span < bestSpan){
+          bestSpan = span;
+          bestStart = i;
+        }
+      }
+      return avail.slice(bestStart, bestStart + k);
+    }
+  }
+  return null;
+}
+
+function findBestCrossFloor(k){
+  // Greedy approach:
+  // 1. pick the floor chunk with largest available rooms (or smallest span) as starting set
+  // 2. iteratively add the available room that causes the least increase in totalPathTime
+  const avail = getAllAvailableRooms();
+  if(avail.length < k) return null;
+
+  // find starting seed: prefer a same-floor chunk even if smaller than k (choose as many as possible)
+  let seed = [];
+  // choose floor with maximum available count
+  let maxCount = 0, chosenFloor = null;
+  for(const f of floors){
+    const a = f.rooms.filter(r=>r.state==='available').sort((a,b)=>a.idx-b.idx);
+    if(a.length > maxCount){
+      maxCount = a.length; chosenFloor = a;
+    }
+  }
+  if(chosenFloor && chosenFloor.length>0){
+    // take up to k from that floor using sliding window to minimize span
+    const take = Math.min(k, chosenFloor.length);
+    if(take === chosenFloor.length) {
+      seed = chosenFloor.slice();
+    } else {
+      let bestStart = 0, bestSpan = Infinity;
+      for(let i=0;i<=chosenFloor.length - take;i++){
+        const span = chosenFloor[i+take-1].idx - chosenFloor[i].idx;
+        if(span < bestSpan){
+          bestSpan = span; bestStart = i;
+        }
+      }
+      seed = chosenFloor.slice(bestStart, bestStart + take);
+    }
+  }
+
+  // if seed size >= k, trim to k
+  if(seed.length >= k) return seed.slice(0,k);
+
+  // Now greedily add rooms from remaining available ones that minimize increase in totalPathTime
+  const selected = seed.slice();
+  const remaining = avail.filter(a => !selected.some(s=>s.id===a.id));
+  while(selected.length < k){
+    let bestRoom = null;
+    let bestIncrease = Infinity;
+    for(const candidate of remaining){
+      const trial = selected.concat([candidate]);
+      const increase = totalPathTime(trial) - totalPathTime(selected);
+      if(increase < bestIncrease){
+        bestIncrease = increase;
+        bestRoom = candidate;
+      }
+    }
+    if(!bestRoom) break;
+    selected.push(bestRoom);
+    // remove bestRoom from remaining
+    const idx = remaining.findIndex(x=>x.id===bestRoom.id);
+    if(idx>=0) remaining.splice(idx,1);
+  }
+
+  if(selected.length === k) return selected;
+  return null;
+}
+
+function bookRooms(k){
+  if(k < 1 || k > 5) return updateStatus('Please enter 1 to 5 rooms.');
+  const availableCount = getAllAvailableRooms().length;
+  if(availableCount < k) return updateStatus('Not enough available rooms right now.');
+
+  // 1. try same-floor
+  const same = findBestSameFloor(k);
+  if(same){
+    same.forEach(r => r.state = 'booked');
+    renderHotel();
+    updateStatus(`Booked ${k} room(s) on floor ${same[0].floor}. Total travel time: ${totalPathTime(same)} min.`);
+    return;
+  }
+
+  // 2. try cross-floor
+  const cross = findBestCrossFloor(k);
+  if(cross){
+    cross.forEach(r => r.state = 'booked');
+    renderHotel();
+    updateStatus(`Booked ${k} room(s) across floors. Total travel time: ${totalPathTime(cross)} min.`);
+    return;
+  }
+
+  updateStatus('Could not find rooms (unexpected).');
+}
+
+/* ----- UI actions ----- */
+document.getElementById('bookBtn').onclick = ()=>{
+  const k = parseInt(document.getElementById('numRooms').value || '0', 10);
+  bookRooms(k);
+};
+document.getElementById('randBtn').onclick = ()=>{
+  // randomly mark some rooms occupied
+  // clear first
+  floors.forEach(f=> f.rooms.forEach(r=> { if(r.state !== 'booked') r.state='available'; }));
+  // occupy ~20% random
+  const all = [];
+  floors.forEach(f=> f.rooms.forEach(r=> all.push(r)));
+  const toOccupy = Math.floor(all.length * 0.18);
+  shuffleArray(all);
+  for(let i=0;i<toOccupy;i++){
+    if(all[i].state === 'available') all[i].state = 'occupied';
+  }
+  renderHotel();
+  updateStatus('Random occupancy generated. Click rooms to toggle occupancy (for testing).');
+};
+document.getElementById('resetBtn').onclick = ()=>{
+  floors.forEach(f=> f.rooms.forEach(r=> r.state='available'));
+  renderHotel();
+  updateStatus('Reset complete.');
+};
+
+function updateStatus(txt){
+  const s = document.getElementById('status');
+  s.textContent = txt;
+}
+
+/* small utility */
+function shuffleArray(a){
+  for(let i = a.length -1; i>0; i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+}
+
+renderHotel();
+updateStatus('Ready. Use "Generate Random Occupancy" to simulate or toggle rooms by clicking them.');
+</script>
+</body>
+</html>
